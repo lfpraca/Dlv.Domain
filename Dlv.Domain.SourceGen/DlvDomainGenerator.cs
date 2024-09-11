@@ -10,7 +10,8 @@ namespace Dlv.Domain.SourceGen;
 
 [Generator]
 public class DlvDomainGenerator: IIncrementalGenerator {
-    private static SymbolDisplayFormat NoGenericFormat = new(
+    private static readonly SymbolDisplayFormat no_generic_format = new(
+        globalNamespaceStyle: SymbolDisplayGlobalNamespaceStyle.Included,
         typeQualificationStyle: SymbolDisplayTypeQualificationStyle.NameAndContainingTypesAndNamespaces,
         genericsOptions: SymbolDisplayGenericsOptions.None); // TODO: Lazy, try to replace with symbol check
 
@@ -37,7 +38,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
 
         foreach (var attribute in classDeclaration.AttributeLists.SelectMany(static x => x.Attributes)) {
             var attributeSymbol = model.GetSymbolInfo(attribute).Symbol as IMethodSymbol;
-            if (attributeSymbol?.ContainingType.ToDisplayString() == "Dlv.Domain.Annotations.DlvDomainAttribute") {
+            if (attributeSymbol?.ContainingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == "global::Dlv.Domain.Annotations.DlvDomainAttribute") {
                 return classDeclaration;
             }
         }
@@ -57,7 +58,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             var symbol = model.GetDeclaredSymbol(@class);
             if (symbol == null) { continue; }
 
-            classesForGeneration.Add($"{symbol.ToDisplayString(NoGenericFormat)}`{symbol.Arity}");
+            classesForGeneration.Add($"{symbol.ToDisplayString(no_generic_format)}`{symbol.Arity}");
         }
 
         var enumerableSymbol = compilation.GetTypeByMetadataName(typeof(IEnumerable<>).FullName)!.Construct(compilation.GetTypeByMetadataName("Dlv.Domain.DomainError")!)!;
@@ -100,7 +101,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
                     var interfaceSymbol = compilation.GetTypeByMetadataName("Dlv.Domain.DomainObject");
 
                     var domainObject = (interfaceSymbol != null && propertySymbol.AllInterfaces.Contains(interfaceSymbol))
-                        || classesForGeneration.Contains($"{propertySymbol.ToDisplayString(NoGenericFormat)}`{(propertySymbol as INamedTypeSymbol)?.Arity}");
+                        || classesForGeneration.Contains($"{propertySymbol.ToDisplayString(no_generic_format)}`{(propertySymbol as INamedTypeSymbol)?.Arity}");
 
                     var accessors = property.AccessorList?.Accessors;
                     var setterType = SetterType.None;
@@ -138,18 +139,19 @@ public class DlvDomainGenerator: IIncrementalGenerator {
                         }
                     }
 
-                    memberTypeLookup.Add(property.Identifier.Text, new PropertyInformation { DomainObject = domainObject, Type = propertySymbol.ToDisplayString() });
+                    memberTypeLookup.Add(property.Identifier.Text, new PropertyInformation { DomainObject = domainObject, Type = propertySymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) });
 
                     memberInfo.Add(new MemberInfo {
                         DomainObject = domainObject,
-                        Type = propertySymbol.ToDisplayString(),
+                        Type = propertySymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                        //Type = propertySymbol.ToMinimalDisplayString(model, property.SpanStart),
                         Identifier = property.Identifier.Text,
                         SetterType = setterType,
                     });
                 } else if (member is MethodDeclarationSyntax method) {
                     var hasValidationAttribute = false;
                     foreach (var attr in method.AttributeLists.SelectMany(static x => x.Attributes)) {
-                        if (model.GetSymbolInfo(attr).Symbol?.ContainingType.ToDisplayString() == "Dlv.Domain.Annotations.DlvDomainValidationAttribute") {
+                        if (model.GetSymbolInfo(attr).Symbol?.ContainingType.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == "global::Dlv.Domain.Annotations.DlvDomainValidationAttribute") {
                             hasValidationAttribute = true;
                             break;
                         }
@@ -189,7 +191,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
 
             foreach (var param in validationMethods.SelectMany(static x => x.Parameters)) {
                 if (memberTypeLookup.TryGetValue(param.Name, out var type)) {
-                    if (type.Type != param.Type.ToDisplayString()) {
+                    if (type.Type != param.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)) {
                         context.ReportDiagnostic(Diagnostic.Create(
                             new DiagnosticDescriptor(
                                 "DLVDMNSG004",
@@ -218,25 +220,25 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             var className = GetFullName(classDeclaration);
 
             string innerCode = $$"""
-                    {{(classDeclaration.Modifiers.Any(static x => x.Kind() == SyntaxKind.InternalKeyword) ? "internal" : "public")}} partial class {{className}} : Dlv.Domain.DomainObject
+                    {{(classDeclaration.Modifiers.Any(static x => x.Kind() == SyntaxKind.InternalKeyword) ? "internal" : "public")}} partial class {{className}} : global::Dlv.Domain.DomainObject
                     {
                         private {{classDeclaration?.Identifier.Text}}() { }
 
-                        public static Dlv.Domain.DomainResult<{{className}}> TryNew(
+                        public static global::Dlv.Domain.DomainResult<{{className}}> TryNew(
                             {{string.Join(',' + Environment.NewLine + Spaces12, memberInfo.Select(static x => x.ToFactoryParam()).Where(static x => x != null))}})
                         {
                             {{string.Join(Environment.NewLine + Spaces12, memberInfo.Select(static x => x.ToNullCheck()).Where(static x => x != null))}}
 
                             {{ToValidationCalls(validationMethods, memberInfo, className, memberTypeLookup)}}
 
-                            return new Dlv.Domain.DomainResult<{{className}}>.Success(new {{className}}
+                            return new global::Dlv.Domain.DomainResult<{{className}}>.Success(new {{className}}
                             {
                                 {{string.Join(Environment.NewLine + Spaces16, memberInfo.Select(static x => x.ToFinalizerPart()).Where(static x => x != null))}}
                             });
                         }
 
-                        public Dlv.Domain.DomainResult<{{className}}>.Success ToResult()
-                            => new Dlv.Domain.DomainResult<{{className}}>.Success(this);
+                        public global::Dlv.Domain.DomainResult<{{className}}>.Success ToResult()
+                            => new global::Dlv.Domain.DomainResult<{{className}}>.Success(this);
 
                         {{string.Join(Environment.NewLine + Spaces8, ToSetters(memberInfo, validationMethods, memberTypeLookup))}}
                     }
@@ -282,19 +284,19 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             StringBuilder validationMethodCalls = new();
             foreach (var validationMethod in validationMethods) {
                 if (validationMethod.Parameters.Any(x => x.Name == member.Identifier)) {
-                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Name}({string.Join(", ", validationMethod.Parameters.Select(p => p.Name == member.Identifier ? $"{p.Name}{RaiseDomain(p.Name)}" : $"this.{p.Name}"))}) ?? Enumerable.Empty<Dlv.Domain.DomainError>());");
+                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Name}({string.Join(", ", validationMethod.Parameters.Select(p => p.Name == member.Identifier ? $"{p.Name}{RaiseDomain(p.Name)}" : $"this.{p.Name}"))}) ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
                 }
             }
             yield return $$"""
     public void Set{{member.Identifier}}({{member.ToFactoryParam()}})
             {
-                var __errors__ = new List<Dlv.Domain.DomainError>();
+                var __errors__ = new List<global::Dlv.Domain.DomainError>();
                 {{member.ToDomainObjectCheck()}}
-                {{(member.DomainObject ? "if (__errors__.Count != 0) { throw new Dlv.Domain.DomainException(__errors__); }" : null)}}
+                {{(member.DomainObject ? "if (__errors__.Count != 0) { throw new global::Dlv.Domain.DomainException(__errors__); }" : null)}}
 
     {{validationMethodCalls}}
 
-                if (__errors__.Count != 0) { throw new Dlv.Domain.DomainException(__errors__); }
+                if (__errors__.Count != 0) { throw new global::Dlv.Domain.DomainException(__errors__); }
             }
     """;
         }
@@ -315,13 +317,13 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             return null;
         }
         return $$"""
-var __errors__ = new List<Dlv.Domain.DomainError>();
+var __errors__ = new List<global::Dlv.Domain.DomainError>();
             {{string.Join(Environment.NewLine + Spaces12, domainObjects.Select(static x => x.ToDomainObjectCheck()))}}
-            {{(domainObjects.Count != 0 ? $"if (__errors__.Count != 0) {{ return new Dlv.Domain.DomainResult<{className}>.Failure(__errors__); }}" : null)}}
+            {{(domainObjects.Count != 0 ? $"if (__errors__.Count != 0) {{ return new global::Dlv.Domain.DomainResult<{className}>.Failure(__errors__); }}" : null)}}
 
-            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Name}({string.Join(", ", x.Parameters.Select(p => $"{p.Name}{RaiseDomain(p.Name)}"))}) ?? Enumerable.Empty<Dlv.Domain.DomainError>());"))}}
+            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Name}({string.Join(", ", x.Parameters.Select(p => $"{p.Name}{RaiseDomain(p.Name)}"))}) ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
 
-            if (__errors__.Count != 0) { return new Dlv.Domain.DomainResult<{{className}}>.Failure(__errors__); }
+            if (__errors__.Count != 0) { return new global::Dlv.Domain.DomainResult<{{className}}>.Failure(__errors__); }
 """;
     }
 }
@@ -335,7 +337,7 @@ internal class MemberInfo {
     public string? ToFactoryParam() {
         if (this.SetterType != SetterType.None) {
             if (this.DomainObject) {
-                return $"Dlv.Domain.DomainResult<{this.Type}> {this.Identifier}";
+                return $"global::Dlv.Domain.DomainResult<{this.Type}> {this.Identifier}";
             } else {
                 return $"{this.Type} {this.Identifier}";
             }
@@ -353,9 +355,9 @@ internal class MemberInfo {
     public string? ToDomainObjectCheck() {
         if (this.DomainObject) {
             return $$"""
-        if ({{this.Identifier}} is Dlv.Domain.DomainResult<{{this.Type}}>.Failure)
+        if ({{this.Identifier}} is global::Dlv.Domain.DomainResult<{{this.Type}}>.Failure)
                     {
-                        __errors__.AddRange(((Dlv.Domain.DomainResult <{{this.Type}}>.Failure){{this.Identifier}}).Errors.Select(static x => new Dlv.Domain.DomainError(string.IsNullOrEmpty(x.Field) ? nameof({{this.Identifier}}) : $"{nameof({{this.Identifier}})}/{x.Field}", x.Error)));
+                        __errors__.AddRange(((global::Dlv.Domain.DomainResult <{{this.Type}}>.Failure){{this.Identifier}}).Errors.Select(static x => new global::Dlv.Domain.DomainError(string.IsNullOrEmpty(x.Field) ? nameof({{this.Identifier}}) : $"{nameof({{this.Identifier}})}/{x.Field}", x.Error)));
                     }
         """;
         }
