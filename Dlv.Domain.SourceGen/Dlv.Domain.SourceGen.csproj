@@ -7,7 +7,7 @@
 		<ImplicitUsings>enable</ImplicitUsings>
 		<Nullable>enable</Nullable>
 		<WarningsAsErrors>nullable</WarningsAsErrors>
-		<Version>0.1.1-alpha</Version>
+		<Version>0.2.0-alpha</Version>
 
 		<Title>Dlv Domain Source Generators</Title>
 		<Summary>Source generators for Dlv Domain</Summary>
