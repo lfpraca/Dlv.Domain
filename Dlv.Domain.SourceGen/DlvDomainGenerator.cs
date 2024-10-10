@@ -101,14 +101,35 @@ public class DlvDomainGenerator: IIncrementalGenerator {
                     // TODO: Consider case where a const is passed in
                     if (renameAttribute != null) {
                         var argumentExpression = renameAttribute.ArgumentList?.Arguments.FirstOrDefault()?.Expression;
-                        key = argumentExpression switch
-                        {
-                            LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.StringLiteralExpression)
-                                => literal.Token.ValueText,
-                            LiteralExpressionSyntax literal when literal.IsKind(SyntaxKind.NullLiteralExpression)
-                                => null,
-                            _ => null,
-                        };
+                        if (argumentExpression is LiteralExpressionSyntax literal) {
+                            if (literal.IsKind(SyntaxKind.StringLiteralExpression)) {
+                                key = literal.Token.ValueText;
+                            } else if (literal.IsKind(SyntaxKind.NullLiteralExpression)) {
+                                key = null;
+                            } else {
+                                context.ReportDiagnostic(Diagnostic.Create(
+                                    new DiagnosticDescriptor(
+                                        "DLVDMNSG010",
+                                        "Invalid argument",
+                                        "Argument must be a literal string or null",
+                                        "InvalidArgument",
+                                        DiagnosticSeverity.Error,
+                                        isEnabledByDefault: true),
+                                    literal.GetLocation()));
+                                key = property.Identifier.Text;
+                            }
+                        } else {
+                            context.ReportDiagnostic(Diagnostic.Create(
+                                new DiagnosticDescriptor(
+                                    "DLVDMNSG010",
+                                    "Invalid argument",
+                                    "Argument must be a literal string or null",
+                                    "InvalidArgument",
+                                    DiagnosticSeverity.Error,
+                                    isEnabledByDefault: true),
+                                renameAttribute.GetLocation()));
+                            key = property.Identifier.Text;
+                        }
                     } else {
                         key = property.Identifier.Text;
                     }
@@ -220,6 +241,19 @@ public class DlvDomainGenerator: IIncrementalGenerator {
                                     isEnabledByDefault: true),
                                 method.ReturnType.GetLocation()));
                         }
+
+                        if (methodSymbol.Parameters.Length == 0) {
+                            context.ReportDiagnostic(Diagnostic.Create(
+                                new DiagnosticDescriptor(
+                                    "DLVDMNSG009",
+                                    "Parameterless validator",
+                                    "Validation function must receive at least one parameter",
+                                    "ParameterlessValidator",
+                                    DiagnosticSeverity.Error,
+                                    isEnabledByDefault: true),
+                                method.GetLocation()));
+                            return;
+                        }
                     }
                 }
             }
@@ -319,7 +353,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             StringBuilder validationMethodCalls = new();
             foreach (var validationMethod in validationMethods) {
                 if (validationMethod.Method.Parameters.Any(x => x.Name == member.Identifier)) {
-                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Method.Name}({string.Join(", ", validationMethod.Method.Parameters.Select(p => p.Name == member.Identifier ? $"{p.Name}{RaiseDomain(p.Name)}" : $"this.{p.Name}"))}){validationMethod.ToReturnMap(propertyLookup[validationMethod.Method.Parameters.FirstOrDefault()!.Name].Identifier)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
+                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Method.Name}({string.Join(", ", validationMethod.Method.Parameters.Select(p => p.Name == member.Identifier ? $"{p.Name}{RaiseDomain(p.Name)}" : $"this.{p.Name}"))}).Where(static x => x != null){validationMethod.ToReturnMap(propertyLookup[validationMethod.Method.Parameters.FirstOrDefault()!.Name].Identifier)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
                 }
             }
             yield return $$"""
@@ -356,7 +390,7 @@ var __errors__ = new List<global::Dlv.Domain.DomainError>();
             {{string.Join(Environment.NewLine + Spaces12, domainObjects.Select(static x => x.ToDomainObjectCheck()))}}
             {{(domainObjects.Count != 0 ? $"if (__errors__.Count != 0) {{ return new global::Dlv.Domain.DomainResult<{className}>.Failure(__errors__); }}" : null)}}
 
-            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Method.Name}({string.Join(", ", x.Method.Parameters.Select(p => $"{p.Name}{RaiseDomain(p.Name)}"))}){x.ToReturnMap(propertyLookup[x.Method.Parameters.FirstOrDefault()!.Name].Identifier)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
+            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Method.Name}({string.Join(", ", x.Method.Parameters.Select(p => $"{p.Name}{RaiseDomain(p.Name)}"))}).Where(static x => x != null){x.ToReturnMap(propertyLookup[x.Method.Parameters.FirstOrDefault()!.Name].Identifier)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
 
             if (__errors__.Count != 0) { return new global::Dlv.Domain.DomainResult<{{className}}>.Failure(__errors__); }
 """;
