@@ -31,15 +31,15 @@ public partial class MyDomain {
     [DlvDomainValidation]
     private static IEnumerable<DomainError>? MyInt4_ShouldBeSmallerThan_MyNz(int MyInt4, NonZeroInt MyNz) {
         if (MyInt4 >= MyNz.Value) {
-            return [new("MyInt4", "MyInt4 should be smaller than MyNz")];
+            yield return new("MyInt4", "MyInt4 should be smaller than MyNz");
         }
-        return null;
     }
     [DlvDomainValidation]
-    private static IEnumerable<DomainError>? MyInt4_ShouldNotBeEqualTo_MyInt(int MyInt4, int MyInt) {
+    private static string? MyInt4_ShouldNotBeEqualTo_MyInt(int MyInt4, int MyInt) {
         if (MyInt4 == MyInt) {
-            return [new("MyInt4", "MyInt4 should not be equal to MyInt")];
+            return "MyInt4 should not be equal to MyInt";
         }
+
         return null;
     }
     public int MyInt { get; private set; }

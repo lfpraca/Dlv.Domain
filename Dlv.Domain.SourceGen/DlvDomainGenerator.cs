@@ -61,7 +61,8 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             classesForGeneration.Add($"{symbol.ToDisplayString(no_generic_format)}`{symbol.Arity}");
         }
 
-        var enumerableSymbol = compilation.GetTypeByMetadataName(typeof(IEnumerable<>).FullName)!.Construct(compilation.GetTypeByMetadataName("Dlv.Domain.DomainError")!)!;
+        var domainErrorEnumerableSymbol = compilation.GetTypeByMetadataName(typeof(IEnumerable<>).FullName!)!.Construct(compilation.GetTypeByMetadataName("Dlv.Domain.DomainError")!);
+        var stringEnumerableSymbol = compilation.GetTypeByMetadataName(typeof(IEnumerable<>).FullName!)!.Construct(compilation.GetTypeByMetadataName("System.String")!);
         foreach (var classDeclaration in classes) {
             var partial = classDeclaration.Modifiers.Any(SyntaxKind.PartialKeyword);
 
@@ -92,7 +93,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             var model = compilation.GetSemanticModel(classDeclaration.SyntaxTree);
             var memberInfo = new List<MemberInfo>();
             var memberTypeLookup = new Dictionary<string, PropertyInformation>();
-            var validationMethods = new List<IMethodSymbol>();
+            var validationMethods = new List<ValidationMethod>();
             foreach (var member in classDeclaration.Members) {
                 if (member is PropertyDeclarationSyntax property) {
                     var propertySymbol = model.GetTypeInfo(property.Type).Type;
@@ -172,24 +173,34 @@ public class DlvDomainGenerator: IIncrementalGenerator {
 
                     var methodSymbol = model.GetDeclaredSymbol(method);
                     if (methodSymbol != null) {
-                        if (!methodSymbol.ReturnType.Equals(enumerableSymbol, SymbolEqualityComparer.Default)
-                            && !methodSymbol.ReturnType.AllInterfaces.Any(x => x.Equals(enumerableSymbol, SymbolEqualityComparer.Default))) {
+                        if (methodSymbol.ReturnType.Equals(domainErrorEnumerableSymbol, SymbolEqualityComparer.Default)
+                            || methodSymbol.ReturnType.AllInterfaces.Any(x => x.Equals(domainErrorEnumerableSymbol, SymbolEqualityComparer.Default))) {
+                            validationMethods.Add(new ValidationMethod {
+                               Method = methodSymbol,
+                               ReturnType = ValidationReturnType.DomainErrorEnumerable,
+                            });
+                        } else if (methodSymbol.ReturnType.Equals(stringEnumerableSymbol, SymbolEqualityComparer.Default)
+                            || methodSymbol.ReturnType.AllInterfaces.Any(x => x.Equals(stringEnumerableSymbol, SymbolEqualityComparer.Default))) {
+                            validationMethods.Add(new ValidationMethod {
+                                Method = methodSymbol,
+                                ReturnType = ValidationReturnType.StringEnumerable,
+                            });
+                        } else {
                             context.ReportDiagnostic(Diagnostic.Create(
                                 new DiagnosticDescriptor(
                                     "DLVDMNSG008",
                                     "Return type",
-                                    "Return type of domain validation must implement IEnumerable<DomainError>",
+                                    "Return type of domain validation must implement IEnumerable<DomainError> or IEnumerable<string>",
                                     "InvalidValidationMethodReturn",
                                     DiagnosticSeverity.Error,
                                     isEnabledByDefault: true),
                                 method.ReturnType.GetLocation()));
                         }
-                        validationMethods.Add(methodSymbol);
                     }
                 }
             }
 
-            foreach (var param in validationMethods.SelectMany(static x => x.Parameters)) {
+            foreach (var param in validationMethods.SelectMany(static x => x.Method.Parameters)) {
                 if (memberTypeLookup.TryGetValue(param.Name, out var type)) {
                     if (type.Type != param.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)) {
                         context.ReportDiagnostic(Diagnostic.Create(
@@ -270,7 +281,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
         return name ?? "";
     }
 
-    private static IEnumerable<string> ToSetters(ICollection<MemberInfo> members, ICollection<IMethodSymbol> validationMethods, Dictionary<string, PropertyInformation> propertyLookup) {
+    private static IEnumerable<string> ToSetters(ICollection<MemberInfo> members, ICollection<ValidationMethod> validationMethods, Dictionary<string, PropertyInformation> propertyLookup) {
         string? RaiseDomain(string name) {
             if (propertyLookup.TryGetValue(name, out var info)) {
                 if (info.DomainObject) {
@@ -283,8 +294,8 @@ public class DlvDomainGenerator: IIncrementalGenerator {
         foreach (var member in members.Where(static x => x.SetterType == SetterType.Set)) {
             StringBuilder validationMethodCalls = new();
             foreach (var validationMethod in validationMethods) {
-                if (validationMethod.Parameters.Any(x => x.Name == member.Identifier)) {
-                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Name}({string.Join(", ", validationMethod.Parameters.Select(p => p.Name == member.Identifier ? $"{p.Name}{RaiseDomain(p.Name)}" : $"this.{p.Name}"))}) ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
+                if (validationMethod.Method.Parameters.Any(x => x.Name == member.Identifier)) {
+                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Method.Name}({string.Join(", ", validationMethod.Method.Parameters.Select(p => p.Name == member.Identifier ? $"{p.Name}{RaiseDomain(p.Name)}" : $"this.{p.Name}"))}){validationMethod.ToReturnMap(validationMethod.Method.Parameters.FirstOrDefault()?.Name)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
                 }
             }
             yield return $$"""
@@ -302,7 +313,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
         }
     }
 
-    private static string? ToValidationCalls(ICollection<IMethodSymbol> validationMethods, ICollection<MemberInfo> members, string className, Dictionary<string, PropertyInformation> propertyLookup) {
+    private static string? ToValidationCalls(ICollection<ValidationMethod> validationMethods, ICollection<MemberInfo> members, string className, Dictionary<string, PropertyInformation> propertyLookup) {
         string? RaiseDomain(string name) {
             if (propertyLookup.TryGetValue(name, out var info)) {
                 if (info.DomainObject) {
@@ -321,7 +332,7 @@ var __errors__ = new List<global::Dlv.Domain.DomainError>();
             {{string.Join(Environment.NewLine + Spaces12, domainObjects.Select(static x => x.ToDomainObjectCheck()))}}
             {{(domainObjects.Count != 0 ? $"if (__errors__.Count != 0) {{ return new global::Dlv.Domain.DomainResult<{className}>.Failure(__errors__); }}" : null)}}
 
-            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Name}({string.Join(", ", x.Parameters.Select(p => $"{p.Name}{RaiseDomain(p.Name)}"))}) ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
+            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Method.Name}({string.Join(", ", x.Method.Parameters.Select(p => $"{p.Name}{RaiseDomain(p.Name)}"))}){x.ToReturnMap(x.Method.Parameters.FirstOrDefault()?.Name)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
 
             if (__errors__.Count != 0) { return new global::Dlv.Domain.DomainResult<{{className}}>.Failure(__errors__); }
 """;
@@ -374,6 +385,20 @@ internal class MemberInfo {
         }
         return null;
     }
+}
+
+internal class ValidationMethod {
+    public IMethodSymbol Method { get; set; } = null!;
+    public ValidationReturnType ReturnType { get; set; }
+
+    public string? ToReturnMap(string? key) {
+        return this.ReturnType == ValidationReturnType.StringEnumerable ? $".Select(static x => new global::Dlv.Domain.DomainError({(key != null ? $@"""{key}""" : "null" )}, x))" : null;
+    }
+}
+
+internal enum ValidationReturnType {
+    DomainErrorEnumerable,
+    StringEnumerable,
 }
 
 internal class PropertyInformation {
