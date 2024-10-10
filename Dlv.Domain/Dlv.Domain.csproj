@@ -7,7 +7,7 @@
         <Nullable>enable</Nullable>
         <WarningsAsErrors>nullable</WarningsAsErrors>
         <GeneratePackageOnBuild>true</GeneratePackageOnBuild>
-        <Version>0.2.0-alpha</Version>
+        <Version>0.3.0-beta</Version>
 
         <Title>Dlv Domain</Title>
         <Summary>Helpers and source generator for invariant-maintaing domain objects</Summary>
