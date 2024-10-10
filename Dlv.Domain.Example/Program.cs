@@ -22,29 +22,27 @@ public class Program {
 [DlvDomain]
 public partial class MyDomain {
     [DlvDomainValidation]
-    private static IReadOnlyList<DomainError>? MyInt_ShouldBeSmallerThan_MyNz(int MyInt, NonZeroInt MyNz) {
+    private static IEnumerable<string>? MyInt_ShouldBeSmallerThan_MyNz(int MyInt, NonZeroInt MyNz) {
         if (MyInt >= MyNz.Value) {
-            return [new("MyInt", "MyInt should be smaller than MyNz")];
+            yield return "MyInt should be smaller than MyNz";
         }
-        return null;
     }
     [DlvDomainValidation]
     private static IEnumerable<DomainError>? MyInt4_ShouldBeSmallerThan_MyNz(int MyInt4, NonZeroInt MyNz) {
         if (MyInt4 >= MyNz.Value) {
-            return [new("MyInt4", "MyInt4 should be smaller than MyNz")];
+            yield return new("MyInt4", "MyInt4 should be smaller than MyNz");
         }
-        return null;
     }
     [DlvDomainValidation]
-    private static IEnumerable<DomainError>? MyInt4_ShouldNotBeEqualTo_MyInt(int MyInt4, int MyInt) {
+    private static IEnumerable<string> MyInt4_ShouldNotBeEqualTo_MyInt(int MyInt4, int MyInt) {
         if (MyInt4 == MyInt) {
-            return [new("MyInt4", "MyInt4 should not be equal to MyInt")];
+            yield return "MyInt4 should not be equal to MyInt";
         }
-        return null;
     }
     public int MyInt { get; private set; }
     public int MyInt2 { get; private set; }
     public int MyInt3 { get; private init; }
+    [DlvDomainRename("OtherName")]
     public int MyInt4 { get; private set; }
     public NonZeroInt MyNz { get; private set; }
 }
@@ -52,11 +50,11 @@ public partial class MyDomain {
 [DlvDomain]
 public partial class NonZeroInt {
     [DlvDomainValidation]
-    private static IEnumerable<DomainError>? Value_ShouldNotBeZero(int Value) {
+    private static IEnumerable<string> Value_ShouldNotBeZero(int Value) {
         if (Value == 0) {
-            return [new(null, "Value is zero")];
+            yield return "Value is zero";
         }
-        return null;
     }
+    [DlvDomainRename(null)]
     public int Value { get; private init; }
 }
