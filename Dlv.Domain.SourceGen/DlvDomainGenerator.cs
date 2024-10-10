@@ -138,9 +138,22 @@ public class DlvDomainGenerator: IIncrementalGenerator {
                     if (propertySymbol == null) { continue; }
 
                     var interfaceSymbol = compilation.GetTypeByMetadataName("Dlv.Domain.DomainObject");
+                    var listSymbol = compilation.GetTypeByMetadataName(typeof(List<>).FullName!)!;
 
                     var domainObject = (interfaceSymbol != null && propertySymbol.AllInterfaces.Contains(interfaceSymbol))
                         || classesForGeneration.Contains($"{propertySymbol.ToDisplayString(no_generic_format)}`{(propertySymbol as INamedTypeSymbol)?.Arity}");
+
+                    bool domainObjectList = false;
+                    string? innerType = null;
+                    if (propertySymbol is INamedTypeSymbol typeSymbol && interfaceSymbol != null) {
+                        if (typeSymbol.IsGenericType && typeSymbol.ConstructedFrom.Equals(listSymbol, SymbolEqualityComparer.Default)) {
+                            if (typeSymbol.TypeArguments[0].AllInterfaces.Contains(interfaceSymbol)
+                                || classesForGeneration.Contains($"{typeSymbol.TypeArguments[0].ToDisplayString(no_generic_format)}`{(typeSymbol.TypeArguments[0] as INamedTypeSymbol)?.Arity}")) {
+                                domainObjectList = true;
+                                innerType = typeSymbol.TypeArguments[0].ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat);
+                            }
+                        }
+                    }
 
                     var accessors = property.AccessorList?.Accessors;
                     var setterType = SetterType.None;
@@ -181,17 +194,18 @@ public class DlvDomainGenerator: IIncrementalGenerator {
                     memberTypeLookup.Add(
                         property.Identifier.Text,
                         new PropertyInformation {
-                            DomainObject = domainObject,
+                            DomainObjectType = domainObject ? DomainObjectType.Object : (domainObjectList ? DomainObjectType.List : DomainObjectType.None),
                             Type = propertySymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
-                            Identifier = key,
+                            Name = key,
                         }
                     );
 
                     memberInfo.Add(new MemberInfo {
-                        DomainObject = domainObject,
-                        Type = propertySymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
+                        DomainObjectType = domainObject ? DomainObjectType.Object : (domainObjectList ? DomainObjectType.List : DomainObjectType.None),
+                        Type = innerType ?? propertySymbol.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat),
                         //Type = propertySymbol.ToMinimalDisplayString(model, property.SpanStart),
                         Identifier = property.Identifier.Text,
+                        Name = key,
                         SetterType = setterType,
                     });
                 } else if (member is MethodDeclarationSyntax method) {
@@ -281,6 +295,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
                             DiagnosticSeverity.Error,
                             isEnabledByDefault: true),
                         param.Locations.FirstOrDefault()));
+                    return;
                 }
             }
 
@@ -342,18 +357,16 @@ public class DlvDomainGenerator: IIncrementalGenerator {
     private static IEnumerable<string> ToSetters(ICollection<MemberInfo> members, ICollection<ValidationMethod> validationMethods, Dictionary<string, PropertyInformation> propertyLookup) {
         string? RaiseDomain(string name) {
             if (propertyLookup.TryGetValue(name, out var info)) {
-                if (info.DomainObject) {
-                    return ".Raise()";
-                }
+                return info.ToDomainRaise(name);
             }
-            return null;
+            return name;
         }
 
         foreach (var member in members.Where(static x => x.SetterType == SetterType.Set)) {
             StringBuilder validationMethodCalls = new();
             foreach (var validationMethod in validationMethods) {
                 if (validationMethod.Method.Parameters.Any(x => x.Name == member.Identifier)) {
-                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Method.Name}({string.Join(", ", validationMethod.Method.Parameters.Select(p => p.Name == member.Identifier ? $"{p.Name}{RaiseDomain(p.Name)}" : $"this.{p.Name}"))}).Where(static x => x != null){validationMethod.ToReturnMap(propertyLookup[validationMethod.Method.Parameters.FirstOrDefault()!.Name].Identifier)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
+                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Method.Name}({string.Join(", ", validationMethod.Method.Parameters.Select(p => p.Name == member.Identifier ? RaiseDomain(p.Name) : $"this.{p.Name}"))}).Where(static x => x != null){validationMethod.ToReturnMap(propertyLookup[validationMethod.Method.Parameters.FirstOrDefault()!.Name].Name)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
                 }
             }
             yield return $$"""
@@ -361,11 +374,13 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             {
                 var __errors__ = new List<global::Dlv.Domain.DomainError>();
                 {{member.ToDomainObjectCheck()}}
-                {{(member.DomainObject ? "if (__errors__.Count != 0) { throw new global::Dlv.Domain.DomainException(__errors__); }" : null)}}
+                {{(member.IsDomainObject() ? "if (__errors__.Count != 0) { throw new global::Dlv.Domain.DomainException(__errors__); }" : null)}}
 
     {{validationMethodCalls}}
 
                 if (__errors__.Count != 0) { throw new global::Dlv.Domain.DomainException(__errors__); }
+
+                this.{{member.Identifier}} = {{RaiseDomain(member.Identifier)}};
             }
     """;
         }
@@ -374,14 +389,12 @@ public class DlvDomainGenerator: IIncrementalGenerator {
     private static string? ToValidationCalls(ICollection<ValidationMethod> validationMethods, ICollection<MemberInfo> members, string className, Dictionary<string, PropertyInformation> propertyLookup) {
         string? RaiseDomain(string name) {
             if (propertyLookup.TryGetValue(name, out var info)) {
-                if (info.DomainObject) {
-                    return ".Raise()";
-                }
+                return info.ToDomainRaise(name);
             }
-            return null;
+            return name;
         }
 
-        var domainObjects = members.Where(static x => x.DomainObject).ToList();
+        var domainObjects = members.Where(static x => x.IsDomainObject()).ToList();
         if (validationMethods.Count == 0 && domainObjects.Count == 0) {
             return null;
         }
@@ -390,7 +403,7 @@ var __errors__ = new List<global::Dlv.Domain.DomainError>();
             {{string.Join(Environment.NewLine + Spaces12, domainObjects.Select(static x => x.ToDomainObjectCheck()))}}
             {{(domainObjects.Count != 0 ? $"if (__errors__.Count != 0) {{ return new global::Dlv.Domain.DomainResult<{className}>.Failure(__errors__); }}" : null)}}
 
-            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Method.Name}({string.Join(", ", x.Method.Parameters.Select(p => $"{p.Name}{RaiseDomain(p.Name)}"))}).Where(static x => x != null){x.ToReturnMap(propertyLookup[x.Method.Parameters.FirstOrDefault()!.Name].Identifier)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
+            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Method.Name}({string.Join(", ", x.Method.Parameters.Select(p => RaiseDomain(p.Name)))}).Where(static x => x != null){x.ToReturnMap(propertyLookup[x.Method.Parameters.FirstOrDefault()!.Name].Name)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
 
             if (__errors__.Count != 0) { return new global::Dlv.Domain.DomainResult<{{className}}>.Failure(__errors__); }
 """;
@@ -398,48 +411,60 @@ var __errors__ = new List<global::Dlv.Domain.DomainError>();
 }
 
 internal class MemberInfo {
-    public bool DomainObject { get; set; }
+    public DomainObjectType DomainObjectType { get; set; }
     public string Type { get; set; } = null!;
     public string Identifier { get; set; } = null!;
+    public string? Name { get; set; }
     public SetterType SetterType { get; set; } = SetterType.None;
+
+    public bool IsDomainObject() => this.DomainObjectType != DomainObjectType.None;
 
     public string? ToFactoryParam() {
         if (this.SetterType != SetterType.None) {
-            if (this.DomainObject) {
-                return $"global::Dlv.Domain.DomainResult<{this.Type}> {this.Identifier}";
-            } else {
-                return $"{this.Type} {this.Identifier}";
-            }
+            return this.DomainObjectType switch {
+                DomainObjectType.Object => $"global::Dlv.Domain.DomainResult<{this.Type}> {this.Identifier}",
+                DomainObjectType.List => $"global::System.Collections.Generic.IEnumerable<global::Dlv.Domain.DomainResult<{this.Type}>> {this.Identifier}",
+                _ => $"{this.Type} {this.Identifier}",
+            };
         }
         return null;
     }
 
     public string? ToNullCheck() {
-        if (this.DomainObject && this.SetterType != SetterType.None) {
+        if (this.DomainObjectType != DomainObjectType.None && this.SetterType != SetterType.None) {
             return $"if ({this.Identifier} == null) {{ throw new ArgumentNullException(nameof({this.Identifier})); }}";
         }
         return null;
     }
 
     public string? ToDomainObjectCheck() {
-        if (this.DomainObject) {
-            return $$"""
+        return this.DomainObjectType switch {
+            DomainObjectType.Object => $$"""
         if ({{this.Identifier}} is global::Dlv.Domain.DomainResult<{{this.Type}}>.Failure)
                     {
-                        __errors__.AddRange(((global::Dlv.Domain.DomainResult <{{this.Type}}>.Failure){{this.Identifier}}).Errors.Select(static x => new global::Dlv.Domain.DomainError(string.IsNullOrEmpty(x.Field) ? nameof({{this.Identifier}}) : $"{nameof({{this.Identifier}})}/{x.Field}", x.Error)));
+                        __errors__.AddRange(((global::Dlv.Domain.DomainResult <{{this.Type}}>.Failure){{this.Identifier}}).Errors.Select(static x => new global::Dlv.Domain.DomainError(string.IsNullOrEmpty(x.Field) ? {{(this.Name != null ? $@"""{this.Name}""" : "null")}} : $"{{(this.Name != null ? $"{this.Name}/" : null)}}{x.Field}", x.Error)));
                     }
-        """;
-        }
-        return null;
+        """,
+            DomainObjectType.List => $$"""
+        foreach (var __item__ in {{this.Identifier}})
+                    {
+                        if (__item__ is global::Dlv.Domain.DomainResult<{{this.Type}}>.Failure)
+                        {
+                            __errors__.AddRange(((global::Dlv.Domain.DomainResult <{{this.Type}}>.Failure)__item__).Errors.Select(static x => new global::Dlv.Domain.DomainError(string.IsNullOrEmpty(x.Field) ? {{(this.Name != null ? $@"""{this.Name}""" : "null")}} : $"{{(this.Name != null ? $"{this.Name}/" : null)}}{x.Field}", x.Error)));
+                        }
+                    }
+        """,
+            _ => null,
+        };
     }
 
     public string? ToFinalizerPart() {
         if (this.SetterType != SetterType.None) {
-            if (this.DomainObject) {
-                return $"{this.Identifier} = {this.Identifier}.Raise(),";
-            } else {
-                return $"{this.Identifier} = {this.Identifier},";
-            }
+            return this.DomainObjectType switch {
+                DomainObjectType.Object => $"{this.Identifier} = {this.Identifier}.Raise(),",
+                DomainObjectType.List => $"{this.Identifier} = {this.Identifier}.Select(static x => x.Raise()).ToList(),",
+                _ => $"{this.Identifier} = {this.Identifier},",
+            };
         }
         return null;
     }
@@ -459,10 +484,24 @@ internal enum ValidationReturnType {
     StringEnumerable,
 }
 
+internal enum DomainObjectType {
+    None,
+    Object,
+    List,
+}
+
 internal class PropertyInformation {
-    public bool DomainObject { get; set; }
+    public DomainObjectType DomainObjectType { get; set; }
     public string Type { get; set; } = null!;
-    public string? Identifier { get; set; }
+    public string? Name { get; set; }
+
+    public string? ToDomainRaise(string? name) {
+        return this.DomainObjectType switch {
+            DomainObjectType.Object => $"{name}.Raise()",
+            DomainObjectType.List => $"{name}.Select(static x => x.Raise()).ToList()",
+            _ => name,
+        };
+    }
 }
 
 internal enum SetterType {
