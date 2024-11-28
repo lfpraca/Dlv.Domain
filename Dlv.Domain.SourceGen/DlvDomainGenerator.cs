@@ -366,7 +366,7 @@ public class DlvDomainGenerator: IIncrementalGenerator {
             StringBuilder validationMethodCalls = new();
             foreach (var validationMethod in validationMethods) {
                 if (validationMethod.Method.Parameters.Any(x => x.Name == member.Identifier)) {
-                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Method.Name}({string.Join(", ", validationMethod.Method.Parameters.Select(p => p.Name == member.Identifier ? RaiseDomain(p.Name) : $"this.{p.Name}"))}).Where(static x => x != null){validationMethod.ToReturnMap(propertyLookup[validationMethod.Method.Parameters.FirstOrDefault()!.Name].Name)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
+                    validationMethodCalls.AppendLine(Spaces12 + $"__errors__.AddRange({validationMethod.Method.Name}({string.Join(", ", validationMethod.Method.Parameters.Select(p => p.Name == member.Identifier ? RaiseDomain(p.Name) : $"this.{p.Name}"))})?.Where(static x => x != null){validationMethod.ToReturnMap(propertyLookup[validationMethod.Method.Parameters.FirstOrDefault()!.Name].Name)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());");
                 }
             }
             yield return $$"""
@@ -403,7 +403,7 @@ var __errors__ = new List<global::Dlv.Domain.DomainError>();
             {{string.Join(Environment.NewLine + Spaces12, domainObjects.Select(static x => x.ToDomainObjectCheck()))}}
             {{(domainObjects.Count != 0 ? $"if (__errors__.Count != 0) {{ return new global::Dlv.Domain.DomainResult<{className}>.Failure(__errors__); }}" : null)}}
 
-            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Method.Name}({string.Join(", ", x.Method.Parameters.Select(p => RaiseDomain(p.Name)))}).Where(static x => x != null){x.ToReturnMap(propertyLookup[x.Method.Parameters.FirstOrDefault()!.Name].Name)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
+            {{string.Join(Environment.NewLine + Spaces12, validationMethods.Select(x => $"__errors__.AddRange({x.Method.Name}({string.Join(", ", x.Method.Parameters.Select(p => RaiseDomain(p.Name)))})?.Where(static x => x != null){x.ToReturnMap(propertyLookup[x.Method.Parameters.FirstOrDefault()!.Name].Name)} ?? Enumerable.Empty<global::Dlv.Domain.DomainError>());"))}}
 
             if (__errors__.Count != 0) { return new global::Dlv.Domain.DomainResult<{{className}}>.Failure(__errors__); }
 """;
@@ -475,7 +475,7 @@ internal class ValidationMethod {
     public ValidationReturnType ReturnType { get; set; }
 
     public string? ToReturnMap(string? key) {
-        return this.ReturnType == ValidationReturnType.StringEnumerable ? $".Select(static x => new global::Dlv.Domain.DomainError({(key != null ? $@"""{key}""" : "null" )}, x))" : null;
+        return this.ReturnType == ValidationReturnType.StringEnumerable ? $"?.Select(static x => new global::Dlv.Domain.DomainError({(key != null ? $@"""{key}""" : "null" )}, x))" : null;
     }
 }
 
